@@ -38,7 +38,7 @@ void Sniffer_OnRateChanged(void);
 // --- Hot path (call from ProcessRFPacket) ------------------------------
 
 // Diagnostic: called at the very top of ProcessRFPacket for EVERY demodulated
-// packet, before any CRC/UID check. `hwOk` = SX1280 HW status was RX_OK.
+// packet, before any CRC/UID check. `hwOk` = radio HW status was RX_OK.
 // Lets us tell "radio deaf" (count stays 0) from "RF present but rejected".
 void Sniffer_OnRawPacket(bool hwOk);
 

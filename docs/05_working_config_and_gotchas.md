@@ -48,7 +48,8 @@ UID are set via SPIFFS files, not build flags (gotchas #1, #2).
 bash build.sh /path/to/ExpressLRS T3S3_Sniffer_2400_RX_Serial "your phrase"
 # 2. flash app + filesystem (SPIFFS carries hardware.json + options.json)
 cd /path/to/ExpressLRS/src
-pio run -e T3S3_Sniffer_2400_RX_Serial -t upload -t uploadfs --upload-port /dev/cu.usbmodem1101
+pio run -e T3S3_Sniffer_2400_RX_Serial -t upload --upload-port /dev/cu.usbmodem1101
+pio run -e T3S3_Sniffer_2400_RX_Serial -t uploadfs --upload-port /dev/cu.usbmodem1101
 # 3. watch
 pio device monitor -e T3S3_Sniffer_2400_RX_Serial -p /dev/cu.usbmodem1101 -b 460800
 ```

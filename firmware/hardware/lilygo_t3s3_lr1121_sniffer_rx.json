@@ -1,0 +1,35 @@
+{
+  "_comment": "LILYGO T3-S3 LR1121, non-PA version. ESP32-S3FH4R2, 4 MB flash, 2 MB PSRAM. Receive-only ELRS telemetry sniffer.",
+  "_source_pins": "https://github.com/Xinyuan-LilyGO/LilyGo-LoRa-Series/blob/master/docs/en/t3_s3_lr1121/t3_s3_lr1121_hw.md",
+  "_source_radio": "https://github.com/Xinyuan-LilyGO/LilyGo-LoRa-Series/blob/master/examples/LoRa/T3S3/LR1121_PingPong/LR1121_PingPong.ino",
+  "_comment_serial": "No flight-controller UART pins. GHOST_SERIAL_RAW sends complete CRSF frames to native USB CDC; the diagnostic target sends readable logs and CRSF hex.",
+  "product_name": "LILYGO T3S3 LR1121 Telemetry Sniffer",
+  "lua_name": "T3S3 LR1121",
+
+  "radio_busy": 34,
+  "radio_dio1": 36,
+  "radio_miso": 3,
+  "radio_mosi": 6,
+  "radio_nss": 7,
+  "radio_rst": 8,
+  "radio_sck": 5,
+  "radio_dcdc": true,
+  "_comment_irq": "ELRS calls its IRQ field radio_dio1; on LR1121 this is the DIO9 signal, wired to ESP32 GPIO36. BUSY is GPIO34, unlike the SX1280 board.",
+
+  "radio_rfsw_ctrl": [3, 0, 1, 2, 2, 0, 0, 0],
+  "_comment_rfsw": "LR1121 DIO5/6 control the non-PA board RF switch: enable=3, standby=0, RX LF=1, TX LP=2, TX HP=2, TX HF=0, GNSS=0, RX HF/WiFi=0. Do not add power_rxen/power_txen on ESP32 GPIO21/10: these pins connect to LR1121 DIO7/8.",
+  "_comment_tcxo": "The board requires 3.0 V TCXO control. This is configured by the LR1121 driver integration using GHOST_LR1121_TCXO=6, not a hardware JSON key in ExpressLRS 3.5.6.",
+  "_comment_band": "The target scans only 2.4 GHz LoRa. ELRS 3.5.6 still requires a primary sub-GHz regulatory-domain build option for LR1121; the secondary 2.4 GHz hopping table is always ISM2G4. LR1121 cannot receive SX1280 FLRC modes F500/F1000/D250/D500. Use the separate 2.4 GHz IPEX antenna port on the radio module.",
+
+  "power_min": 0,
+  "power_high": 0,
+  "power_max": 0,
+  "power_default": 0,
+  "power_values": [0],
+  "power_values_dual": [0],
+  "_comment_power": "Only a 0 dBm power-table entry is provided. GHOST_NO_TX prevents RF transmission; these entries also keep unused TX configuration conservative.",
+
+  "led": 37,
+  "use_backpack": false,
+  "_comment_screen": "The OLED is driven by devGhostDisplay.cpp on SDA18/SCL17. No ELRS screen_* keys are used."
+}
