@@ -19,7 +19,7 @@
   "radio_rfsw_ctrl": [3, 0, 1, 2, 2, 0, 0, 0],
   "_comment_rfsw": "LR1121 DIO5/6 control the non-PA board RF switch: enable=3, standby=0, RX LF=1, TX LP=2, TX HP=2, TX HF=0, GNSS=0, RX HF/WiFi=0. Do not add power_rxen/power_txen on ESP32 GPIO21/10: these pins connect to LR1121 DIO7/8.",
   "_comment_tcxo": "The board requires 3.0 V TCXO control. This is configured by the LR1121 driver integration using GHOST_LR1121_TCXO=6, not a hardware JSON key in ExpressLRS 3.5.6.",
-  "_comment_band": "The target scans only 2.4 GHz LoRa. ELRS 3.5.6 still requires a primary sub-GHz regulatory-domain build option for LR1121; the secondary 2.4 GHz hopping table is always ISM2G4. LR1121 cannot receive SX1280 FLRC modes F500/F1000/D250/D500. Use the separate 2.4 GHz IPEX antenna port on the radio module.",
+  "_comment_band": "The web UI selects 2.4 GHz or sub-GHz LoRa. ELRS 3.5.6 requires a primary sub-GHz regulatory domain for LR1121; the secondary 2.4 GHz hopping table is ISM2G4. This 830-945 MHz board supports AU915/FCC915/EU868/IN866. LR1121 cannot receive SX1280 FLRC modes F500/F1000/D250/D500. Use the antenna connector for the selected band.",
 
   "power_min": 0,
   "power_high": 0,

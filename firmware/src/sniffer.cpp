@@ -1,6 +1,6 @@
 // =====================================================================
 // ELRS Telemetry Sniffer (Ghost RX) - core implementation
-// Targets ExpressLRS 3.5.x, SX1280/LR1121 2.4GHz, ESP32-S3.
+// Targets ExpressLRS 3.5.x, SX1280 2.4 GHz / LR1121 dual-band, ESP32-S3.
 // =====================================================================
 #include "sniffer.h"
 
@@ -15,6 +15,7 @@
 #include <string.h>
 #include <MD5Builder.h>             // ESP32 Arduino core (stable across mbedtls versions)
 #include "logging.h"                // DBGLN heartbeat
+#include "options.h"
 #include "CRSF.h"                   // CRSF::LinkStatistics
 #if defined(RADIO_LR1121) && (defined(DEBUG_ENABLED) || defined(GHOST_SERIAL_RAW))
 #include "LR1121_hal.h"
@@ -83,7 +84,7 @@ static void applyUid()
 {
     // Stop hopping while replacing the CRC seed and hop table. Reconfigure the
     // radio afterwards: LR1121 FHSSrandomise resets selection to the sub-GHz
-    // primary band, whereas our active rate uses the 2.4 GHz secondary band.
+    // primary band, while the active rate may use the 2.4 GHz secondary band.
     LostConnection(false);
     // Mirror exactly what rx_main does after a config/bind change:
     OtaUpdateCrcInitFromUid();                       // CRC seed from UID[4..5]
@@ -319,7 +320,7 @@ static void Sniffer_PollSerialCmd()
         char ch = (char)commandSerial->read();
         if (ch == '\n' || ch == '\r')
         {
-            if (s_ghostReady && idx >= 2 && line[0] == 'P' && line[1] == ':')
+            if (s_ghostReady && connectionState < MODE_STATES && idx >= 2 && line[0] == 'P' && line[1] == ':')
             {
                 line[idx] = 0;
                 DBGLN("[TLM RX] set phrase via serial");
@@ -335,12 +336,15 @@ static void Sniffer_PollSerialCmd()
             else if (idx == 1 && line[0] == 'D')
             {
                 // Fixed format and numeric fields keep this response bounded.
-                USBSerial.printf("[D] ready=%u state=%u raw=%u tlm=%u crsf=%u bad=%u usbFree=%d\n",
+                USBSerial.printf("[D] ready=%u state=%u raw=%u tlm=%u crsf=%u bad=%u usbFree=%d uptime=%u\n",
                                  (unsigned)s_ghostReady, (unsigned)connectionState,
                                  (unsigned)s_rawPkts, (unsigned)s_tlmPkts,
                                  (unsigned)s_crsfFrames, (unsigned)s_crsfRejected,
-                                 USBSerial.availableForWrite());
+                                 USBSerial.availableForWrite(), (unsigned)millis());
 #if defined(RADIO_LR1121)
+                USBSerial.printf("[D] band=%u domain=%u freq=%u uid=%u,%u,%u,%u,%u,%u\n",
+                                 (unsigned)firmwareOptions.ghost_subghz, (unsigned)firmwareOptions.domain,
+                                 (unsigned)Radio.currFreq, UID[0], UID[1], UID[2], UID[3], UID[4], UID[5]);
                 if (connectionState == radioFailed && LR1121Hal::instance)
                 {
                     uint8_t version[5] = {0};
@@ -491,12 +495,9 @@ void Ghost_SetupTransports(void)
     // hardware-configured boot (connectionState is a normal state, < MODE_STATES).
     if (connectionState > MODE_STATES) return;
 
-#if defined(MY_BINDING_PHRASE)
-    // ELRS options already set UID[] from the compiled phrase at boot; this
-    // re-applies CRC seed + FHSS table from the same phrase to be explicit and
-    // to allow a fully runtime build to reuse the same path.
-    Sniffer_SetUidFromPhrase(MY_BINDING_PHRASE);
-#endif
+    // setupBindingFromConfig() has already loaded the saved UID and configured
+    // CRC/FHSS. Keep that choice: the web UI can override the flashed default.
+    s_uidValid = true;
 #if defined(GHOST_TRANSPORT_SERIAL)
     GhostSerial_Init();
 #endif

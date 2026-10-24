@@ -16,6 +16,27 @@ during filesystem-only builds and uploads for every environment.
 import os, shutil, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from wifi_config import EXTRA_EDITS as WIFI_CONFIG_EDITS
+from wifi_fallback import EXTRA_EDITS as WIFI_FALLBACK_EDITS
+
+LEGACY_BAND_FILTER = (
+    "#if defined(GHOST_SNIFFER) && defined(GHOST_LR1121_2400_ONLY)\n"
+    "    // Scan SX1280-compatible 2.4 GHz LoRa; LR1121 GFSK is not FLRC.\n"
+    "    if (ModParams->radio_type != RADIO_TYPE_LR1121_LORA_2G4)\n"
+    "        return false;\n"
+    "#endif\n\n"
+)
+BAND_FILTER = (
+    "#if defined(GHOST_SNIFFER)\n"
+    "    // Follow the selected band; a single LR1121 receives one link.\n"
+    "    const auto wantedType = firmwareOptions.ghost_subghz\n"
+    "        ? RADIO_TYPE_LR1121_LORA_900 : RADIO_TYPE_LR1121_LORA_2G4;\n"
+    "    if (ModParams->radio_type != wantedType)\n"
+    "        return false;\n"
+    "#endif\n\n"
+)
 SRC_FILES = [
     "sniffer.h", "sniffer.cpp",
     "devTransport_Serial.cpp",
@@ -137,13 +158,9 @@ EXTRA_EDITS = {
          "    uint8_t GetReceivedLength() const { return currentOffset; }"),
     ],
     "src/common.cpp": [
+        ('#include "OTA.h"', '#include "OTA.h"\n#if defined(GHOST_SNIFFER)\n#include "options.h"\n#endif'),
         ("    // Dual Band modes not supported for hardware with only a single LR1121",
-         "#if defined(GHOST_SNIFFER) && defined(GHOST_LR1121_2400_ONLY)\n"
-         "    // Scan SX1280-compatible 2.4 GHz LoRa; LR1121 GFSK is not FLRC.\n"
-         "    if (ModParams->radio_type != RADIO_TYPE_LR1121_LORA_2G4)\n"
-         "        return false;\n"
-         "#endif\n\n"
-         "    // Dual Band modes not supported for hardware with only a single LR1121"),
+         BAND_FILTER + "    // Dual Band modes not supported for hardware with only a single LR1121"),
     ],
     "lib/LR1121Driver/LR1121_hal.cpp": [
         ("    constexpr uint32_t wtimeoutUS = 1000U;",
@@ -263,6 +280,9 @@ EXTRA_EDITS = {
 def apply_edits(path, edits):
     with open(path, encoding="utf-8") as source:
         text = source.read()
+    # Upgrade checkouts integrated with the previous 2.4 GHz-only port.
+    if os.path.basename(path) == "common.cpp":
+        text = text.replace(LEGACY_BAND_FILTER, BAND_FILTER)
     for i, (anchor, repl) in enumerate(edits, 1):
         if repl in text:
             print(f"{os.path.basename(path)} edit {i}: already applied")
@@ -285,8 +305,12 @@ def main():
         print(f"ERROR: {rx_main} not found. Point me at ExpressLRS/src"); sys.exit(2)
 
     # Validate every anchor before changing any upstream file.
-    pending = {rx_main: apply_edits(rx_main, EDITS)}
-    for relative, edits in EXTRA_EDITS.items():
+    combined = {"src/rx_main.cpp": list(EDITS)}
+    for patchset in (EXTRA_EDITS, WIFI_CONFIG_EDITS, WIFI_FALLBACK_EDITS):
+        for relative, edits in patchset.items():
+            combined.setdefault(relative, []).extend(edits)
+    pending = {}
+    for relative, edits in combined.items():
         path = os.path.join(elrs_src, relative)
         pending[path] = apply_edits(path, edits)
 

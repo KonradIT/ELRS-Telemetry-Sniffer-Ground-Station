@@ -56,8 +56,8 @@ def stage(checkout, environment, phrase):
 
     defines = src / "user_defines.txt"
     text = defines.read_text(encoding="utf-8") if defines.exists() else ""
-    # LR1121 requires a primary sub-GHz domain even when only the secondary
-    # 2.4 GHz hop table is used. The sniffer's scan filter selects 2.4 GHz.
+    # LR1121 requires a primary sub-GHz domain even when the secondary
+    # 2.4 GHz band is selected. Both can be changed through the web UI.
     text = re.sub(r"(?m)^\s*-DRegulatory_Domain_.*$", "", text)
     text = re.sub(r"(?m)^\s*#?\s*-DMY_BINDING_PHRASE=.*$", "", text)
     text = re.sub(r"(?m)^\s*-DAUTO_WIFI_ON_INTERVAL=.*$", "", text)
@@ -73,9 +73,11 @@ def stage(checkout, environment, phrase):
     options = {
         "uid": list(digest[:6]),
         "flash-discriminator": int.from_bytes(digest[6:10], "little") or 1,
-        "wifi-on-interval": -1,
+        "wifi-on-interval": 60,
         "domain": 2 if lr1121 else 0,
     }
+    if lr1121:
+        options["sniffer-band"] = 0
     (data / "options.json").write_text(json.dumps(options), encoding="utf-8")
     print(f"Staged {environment}, hardware={layout}, UID suffix=" + ".".join(map(str, digest[3:6])))
     return src
