@@ -1,5 +1,5 @@
 // =====================================================================
-// Ghost RX transport: SERIAL debug output
+// Ghost RX transport: SERIAL debug or binary USB CRSF output
 // ---------------------------------------------------------------------
 // The first-stage transport for bench bring-up. Registers a sink that
 // prints every reassembled CRSF telemetry frame over the ELRS debug
@@ -9,7 +9,9 @@
 // contention. Requires -D DEBUG_LOG (set in the serial env).
 //
 // Enable with -D GHOST_TRANSPORT_SERIAL (and optionally
-// -D GHOST_SERIAL_HEX to also dump raw frame bytes).
+// -D GHOST_SERIAL_HEX to also dump raw frame bytes). On ESP32-S3,
+// -D GHOST_SERIAL_RAW selects binary CRSF on native USB instead. Raw mode
+// must be built without DEBUG_LOG / other ELRS debug output flags.
 // =====================================================================
 #if defined(GHOST_TRANSPORT_SERIAL)
 
@@ -17,6 +19,28 @@
 #include "logging.h"
 #include "crsf_protocol.h"
 #include "sniffer.h"
+
+#if defined(GHOST_SERIAL_RAW)
+
+#if !defined(PLATFORM_ESP32_S3)
+#error "GHOST_SERIAL_RAW currently requires ESP32-S3 native USB"
+#endif
+#if defined(DEBUG_ENABLED) || defined(GHOST_SERIAL_HEX)
+#error "GHOST_SERIAL_RAW requires debug and hex logging to be disabled"
+#endif
+
+static void Serial_sink(const uint8_t *frame, uint8_t len)
+{
+    if (len < 4 || len > CRSF_MAX_PACKET_LEN || frame[1] != len - 2) return;
+
+    // Called from the main loop, never the radio ISR. Do not wait for a host
+    // or a full USB buffer: keep RF reception running when USB is disconnected
+    // or the host stops reading. Only enqueue a complete CRSF frame.
+    if (USBSerial.availableForWrite() >= len)
+        USBSerial.write(frame, len);
+}
+
+#else
 
 // --- big-endian helpers over the CRSF payload ---
 static inline int16_t  be16s(const uint8_t *p) { return (int16_t)((p[0] << 8) | p[1]); }
@@ -94,8 +118,13 @@ static void Serial_sink(const uint8_t *frame, uint8_t len)
     }
 }
 
+#endif // GHOST_SERIAL_RAW
+
 void GhostSerial_Init()
 {
+    // setupSerial() initializes raw USB before the radio/timer and leaves
+    // SerialLogger on NullStream. Only register the sink here; a second
+    // HWCDC::begin() would recreate the live USB buffers.
     Ghost_Transport_Register(&Serial_sink);
     DBGLN("[TLM RX] serial telemetry sink ready");
 }

@@ -94,6 +94,13 @@ Full layout: [`firmware/hardware/lilygo_t3s3_sniffer_rx.min.json`](firmware/hard
 Every hardware gotcha we hit (wrong pins, PA/FEM detection, OLED bring-up)
 is logged in [`docs/05_working_config_and_gotchas.md`](docs/05_working_config_and_gotchas.md) — **read that first** if you're reproducing this on your own board.
 
+For the **T3-S3 LR1121 non-PA** board, use the separate
+[LR1121 build and binary USB CRSF guide](docs/06_lr1121_usb.md). Its hardware
+layout and radio configuration differ from the SX1280 target above. With no
+matching link for 60 seconds after boot, it opens the ExpressLRS Wi-Fi
+configuration page, where you can save the binding and choose 2.4 GHz or
+sub-GHz reception.
+
 ## Compatibility
 
 - **ExpressLRS 3.5.6** (pinned tag) — not tested against other versions.
@@ -130,7 +137,8 @@ cd ExpressLRS && git checkout 3.5.6 && cd ..
 
 # 3. Flash (see docs/04_flash_serial.md for full esptool/PlatformIO steps,
 #    including the SPIFFS upload needed on first flash):
-#    pio run -e T3S3_Sniffer_2400_RX_Serial -t upload -t uploadfs
+#    pio run -e T3S3_Sniffer_2400_RX_Serial -t upload
+#    pio run -e T3S3_Sniffer_2400_RX_Serial -t uploadfs
 ```
 
 For the BLE-enabled build, use env `T3S3_Sniffer_2400_RX_BLE` instead. Full

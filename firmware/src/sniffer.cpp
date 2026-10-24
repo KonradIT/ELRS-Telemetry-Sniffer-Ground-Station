@@ -1,6 +1,6 @@
 // =====================================================================
 // ELRS Telemetry Sniffer (Ghost RX) - core implementation
-// Targets ExpressLRS 3.5.x, SX1280 2.4GHz, ESP32-S3.
+// Targets ExpressLRS 3.5.x, SX1280 2.4 GHz / LR1121 dual-band, ESP32-S3.
 // =====================================================================
 #include "sniffer.h"
 
@@ -15,7 +15,11 @@
 #include <string.h>
 #include <MD5Builder.h>             // ESP32 Arduino core (stable across mbedtls versions)
 #include "logging.h"                // DBGLN heartbeat
+#include "options.h"
 #include "CRSF.h"                   // CRSF::LinkStatistics
+#if defined(RADIO_LR1121) && (defined(DEBUG_ENABLED) || defined(GHOST_SERIAL_RAW))
+#include "LR1121_hal.h"
+#endif
 
 // External symbols from the ELRS core (already linked in an RX build)
 extern uint8_t UID[UID_LEN];
@@ -23,11 +27,14 @@ extern bool OtaIsFullRes;
 extern uint8_t ExpressLRS_currTlmDenom;   // 1 = tlm off; else 1:N telemetry ratio
 void OtaUpdateCrcInitFromUid();
 uint32_t uidMacSeedGet();
+void LostConnection(bool resumeRx);
 
 // Diagnostics: count captured TLM packets, and RAW demodulated packets
 static volatile uint32_t s_tlmPkts = 0;
 static volatile uint32_t s_rawPkts = 0;   // every SX1280 demod (any CRC result)
 static volatile uint32_t s_rawOk   = 0;   // subset with HW status RX_OK
+static uint32_t s_crsfFrames = 0;
+static uint32_t s_crsfRejected = 0;
 
 // Sniffer's own reception quality of the DRONE telemetry link. RSSI/SNR are
 // captured per telemetry packet; LQ is received-vs-expected tlm slots per second.
@@ -68,12 +75,17 @@ static StubbornReceiver TelemetrySniffer;
 // CRSF frames are small; 72 bytes covers the largest ELRS telemetry frame.
 static uint8_t CRSFinBuffer[72];
 static volatile bool s_uidValid = false;
+static uint8_t ghostCrc8(const uint8_t *p, uint8_t n);
 
 // ---------------------------------------------------------------------
 // UID / passphrase
 // ---------------------------------------------------------------------
 static void applyUid()
 {
+    // Stop hopping while replacing the CRC seed and hop table. Reconfigure the
+    // radio afterwards: LR1121 FHSSrandomise resets selection to the sub-GHz
+    // primary band, while the active rate may use the 2.4 GHz secondary band.
+    LostConnection(false);
     // Mirror exactly what rx_main does after a config/bind change:
     OtaUpdateCrcInitFromUid();                       // CRC seed from UID[4..5]
     FHSSrandomiseFHSSsequence(uidMacSeedGet());      // hop table from UID[2..5]
@@ -81,7 +93,7 @@ static void applyUid()
     // Drop any existing lock so the scanner re-acquires with the NEW hop table /
     // CRC seed. Harmless at boot (already disconnected); on a live phrase change
     // this is what retargets the sniffer to the new link.
-    connectionState = disconnected;
+    LostConnection(true);
 }
 
 void Sniffer_SetUid(const uint8_t uid[6])
@@ -96,7 +108,7 @@ void Sniffer_SetUidFromPhrase(const char *phrase)
     // md5('-DMY_BINDING_PHRASE="' + phrase + '"')  ->  first 6 bytes = UID
     char buf[160];
     int n = snprintf(buf, sizeof(buf), "-DMY_BINDING_PHRASE=\"%s\"", phrase ? phrase : "");
-    if (n <= 0) return;
+    if (n <= 0 || n >= (int)sizeof(buf)) return;
 
     uint8_t digest[16];
     MD5Builder md5;
@@ -176,8 +188,22 @@ void Sniffer_Poll(void)
     if (TelemetrySniffer.HasFinishedData())
     {
         // CRSFinBuffer[0] = dest addr, [1] = length of (type..crc)
-        const uint8_t frameLen = CRSFinBuffer[1] + 2; // + dest + len bytes
-        Ghost_Transport_SendCRSF(CRSFinBuffer, frameLen);
+        const unsigned frameLen = (unsigned)CRSFinBuffer[1] + 2;
+        // A passive listener can miss a fragment even when the real handset
+        // acknowledges it. Never forward stale/truncated data or trust its
+        // length byte until it is bounded by both storage and received bytes.
+        if (CRSFinBuffer[1] >= 2 && frameLen <= CRSF_MAX_PACKET_LEN &&
+            frameLen <= sizeof(CRSFinBuffer) &&
+            frameLen <= TelemetrySniffer.GetReceivedLength() &&
+            ghostCrc8(&CRSFinBuffer[2], CRSFinBuffer[1] - 1) == CRSFinBuffer[frameLen - 1])
+        {
+            Ghost_Transport_SendCRSF(CRSFinBuffer, (uint8_t)frameLen);
+            s_crsfFrames++;
+        }
+        else
+        {
+            s_crsfRejected++;
+        }
         TelemetrySniffer.Unlock();
     }
 }
@@ -240,25 +266,99 @@ static void Sniffer_EmitLinkStats()
 // Until then, Ghost_Loop() must not touch any of that state.
 static volatile bool s_ghostReady = false;
 
+#if defined(RADIO_LR1121) && defined(DEBUG_ENABLED)
+// Diagnostic recovery: restore DIO9 routing without clearing pending IRQs.
+static void Sniffer_DebugRestoreIrq()
+{
+    if (connectionState != disconnected || !LR1121Hal::instance)
+    {
+        DBGLN("[LR1121] debug IRQ command skipped (not searching)");
+        return;
+    }
+
+    uint8_t irqMask[8] = {0, 0, 0, 0x0c, 0, 0, 0, 0};
+    bool applied = false;
+    bool settled = false;
+    int irqPin;
+    noInterrupts();
+    if (connectionState == disconnected)
+    {
+        LR1121Hal *radioHal = LR1121Hal::instance;
+        delayMicroseconds(20);
+        if (radioHal->WaitOnBusy(SX12XX_Radio_1))
+        {
+            // SetDioIrqParams: RX_DONE | TX_DONE on LR1121 DIO9.
+            radioHal->WriteCommand(0x0113, irqMask, sizeof(irqMask), SX12XX_Radio_1);
+            applied = true;
+            delayMicroseconds(20);
+            settled = radioHal->WaitOnBusy(SX12XX_Radio_1);
+        }
+    }
+    irqPin = digitalRead(GPIO_PIN_DIO1);
+    interrupts();
+    DBGLN("[LR1121] command=I applied=%u settled=%u irqPin=%u level=%u",
+          applied, settled, GPIO_PIN_DIO1, irqPin);
+}
+#endif
+
 // Accept a "P:<phrase>\n" command on the debug serial (USBSerial) so the host GCS
 // can set the binding phrase over the cable, exactly like the BLE RX characteristic
-// does. Non-blocking line accumulator; ignores anything that isn't a P: command.
+// does. Diagnostic LR1121 builds also accept "I\n" to restore IRQ routing.
+// Raw USB emits a text status line only when explicitly asked with "D\n".
 static void Sniffer_PollSerialCmd()
 {
-    if (!SerialLogger) return;
+#if defined(GHOST_SERIAL_RAW)
+    Stream *commandSerial = &USBSerial;
+#else
+    Stream *commandSerial = SerialLogger;
+#endif
+    if (!commandSerial) return;
     static char line[80];
     static uint8_t idx = 0;
-    while (SerialLogger->available())
+    while (commandSerial->available() > 0)
     {
-        char ch = (char)SerialLogger->read();
+        char ch = (char)commandSerial->read();
         if (ch == '\n' || ch == '\r')
         {
-            if (idx >= 2 && line[0] == 'P' && line[1] == ':')
+            if (s_ghostReady && connectionState < MODE_STATES && idx >= 2 && line[0] == 'P' && line[1] == ':')
             {
                 line[idx] = 0;
                 DBGLN("[TLM RX] set phrase via serial");
                 Sniffer_SetUidFromPhrase(line + 2);
             }
+#if defined(RADIO_LR1121) && defined(DEBUG_ENABLED)
+            else if (s_ghostReady && idx == 1 && line[0] == 'I')
+            {
+                Sniffer_DebugRestoreIrq();
+            }
+#endif
+#if defined(GHOST_SERIAL_RAW)
+            else if (idx == 1 && line[0] == 'D')
+            {
+                // Fixed format and numeric fields keep this response bounded.
+                USBSerial.printf("[D] ready=%u state=%u raw=%u tlm=%u crsf=%u bad=%u usbFree=%d uptime=%u\n",
+                                 (unsigned)s_ghostReady, (unsigned)connectionState,
+                                 (unsigned)s_rawPkts, (unsigned)s_tlmPkts,
+                                 (unsigned)s_crsfFrames, (unsigned)s_crsfRejected,
+                                 USBSerial.availableForWrite(), (unsigned)millis());
+#if defined(RADIO_LR1121)
+                USBSerial.printf("[D] band=%u domain=%u freq=%u uid=%u,%u,%u,%u,%u,%u\n",
+                                 (unsigned)firmwareOptions.ghost_subghz, (unsigned)firmwareOptions.domain,
+                                 (unsigned)Radio.currFreq, UID[0], UID[1], UID[2], UID[3], UID[4], UID[5]);
+                if (connectionState == radioFailed && LR1121Hal::instance)
+                {
+                    uint8_t version[5] = {0};
+                    LR1121Hal *radioHal = LR1121Hal::instance;
+                    radioHal->WriteCommand(LR11XX_SYSTEM_GET_VERSION_OC, SX12XX_Radio_1);
+                    delayMicroseconds(20);
+                    radioHal->ReadCommand(version, sizeof(version), SX12XX_Radio_1);
+                    USBSerial.printf("[D] radioVersion=%02x/%02x/%02x/%02x/%02x busy=%d\n",
+                                     version[0], version[1], version[2], version[3], version[4],
+                                     digitalRead(GPIO_PIN_BUSY));
+                }
+#endif
+            }
+#endif
             idx = 0;
         }
         else if (idx < sizeof(line) - 1) { line[idx++] = ch; }
@@ -266,24 +366,100 @@ static void Sniffer_PollSerialCmd()
     }
 }
 
+#if defined(RADIO_LR1121) && defined(DEBUG_ENABLED)
+// Read radio health only while searching. In particular, GetIrqStatus() is
+// unsuitable here: the upstream helper also clears every pending IRQ.
+static void Sniffer_LogRadioHealth()
+{
+    if (connectionState != disconnected || !LR1121Hal::instance) return;
+
+    uint8_t status[6] = {0};
+    uint8_t errors[3] = {0};
+    uint8_t version[5] = {0};
+    uint8_t stats[7] = {0};
+    uint8_t packetType[2] = {0};
+    int8_t rssi = 0;
+    int busy;
+    int irqPin;
+    uint32_t frequency;
+    uint32_t syncFrequency;
+    bool primaryBand;
+
+    // Radio IRQ callbacks share this SPI bus. Keep command/response pairs
+    // together, then restore interrupts before printing any USB output.
+    noInterrupts();
+    if (connectionState != disconnected)
+    {
+        interrupts();
+        return;
+    }
+    busy = digitalRead(GPIO_PIN_BUSY);
+    irqPin = digitalRead(GPIO_PIN_DIO1); // LR1121 DIO9 on this board
+    frequency = Radio.currFreq;
+    syncFrequency = FHSSgetInitialFreq();
+    primaryBand = FHSSusePrimaryFreqBand;
+    if (!busy)
+    {
+        LR1121Hal *radioHal = LR1121Hal::instance;
+        // Six zero MOSI bytes perform a direct GET_STATUS read; no IRQ clear
+        // or radio-mode command is sent. Other responses include one dummy byte.
+        radioHal->ReadCommand(status, sizeof(status), SX12XX_Radio_1);
+        radioHal->WriteCommand(LR11XX_SYSTEM_GET_ERRORS_OC, SX12XX_Radio_1);
+        radioHal->ReadCommand(errors, sizeof(errors), SX12XX_Radio_1);
+        radioHal->WriteCommand(LR11XX_SYSTEM_GET_VERSION_OC, SX12XX_Radio_1);
+        radioHal->ReadCommand(version, sizeof(version), SX12XX_Radio_1);
+        radioHal->WriteCommand(LR11XX_RADIO_GET_STATS_OC, SX12XX_Radio_1);
+        radioHal->ReadCommand(stats, sizeof(stats), SX12XX_Radio_1);
+        radioHal->WriteCommand(LR11XX_RADIO_GET_PKT_TYPE_OC, SX12XX_Radio_1);
+        radioHal->ReadCommand(packetType, sizeof(packetType), SX12XX_Radio_1);
+        rssi = Radio.GetRssiInst(SX12XX_Radio_1);
+    }
+    interrupts();
+
+    if (busy)
+    {
+        DBGLN("[LR1121] busy=1 dio9=%u freq=%u sync=%u primary=%u (SPI skipped)",
+              irqPin, frequency, syncFrequency, primaryBand);
+        return;
+    }
+    uint32_t irq = ((uint32_t)status[2] << 24) | ((uint32_t)status[3] << 16)
+                 | ((uint32_t)status[4] << 8) | status[5];
+    unsigned errorFlags = ((unsigned)errors[1] << 8) | errors[2];
+    DBGLN("[LR1121] busy=0 dio9=%u stat=%x/%x mode=%u irq=%x errors=%x rssi=%d freq=%u sync=%u primary=%u",
+          irqPin, status[0], status[1], (status[1] >> 1) & 7, irq,
+          errorFlags, rssi, frequency, syncFrequency, primaryBand);
+    DBGLN("[LR1121] hw=%u type=%u fw=%u.%u packetType=%u received=%u crcErrors=%u headerErrors=%u",
+          version[1], version[2], version[3], version[4], packetType[1],
+          ((unsigned)stats[1] << 8) | stats[2],
+          ((unsigned)stats[3] << 8) | stats[4],
+          ((unsigned)stats[5] << 8) | stats[6]);
+}
+#endif
+
 void Ghost_Loop(uint32_t nowMs)
 {
+    Sniffer_PollSerialCmd();
     if (!s_ghostReady) return;
     Sniffer_Poll();
-    Sniffer_PollSerialCmd();
 #if defined(GHOST_DISPLAY)
     GhostDisplay_Tick(nowMs);
 #endif
 
-    // 5 Hz: inject our own link stats (RSSI/LQ) as a CRSF frame into the stream.
+    // Raw USB defaults to captured aircraft frames only. Synthetic local link
+    // statistics can be explicitly enabled, but are not evidence of telemetry.
+#if !defined(GHOST_SERIAL_RAW) || defined(GHOST_LINK_STATS)
     static uint32_t lastLink = 0;
     if (nowMs - lastLink >= 200) { lastLink = nowMs; Sniffer_EmitLinkStats(); }
+#endif
 
     // 1 Hz heartbeat so we can see link state even without telemetry / OLED.
     static uint32_t lastHb = 0;
     if (nowMs - lastHb >= 1000)
     {
         lastHb = nowMs;
+#if defined(RADIO_LR1121) && defined(DEBUG_ENABLED)
+        Sniffer_LogRadioHealth();
+#endif
         uint16_t hz = ExpressLRS_currAirRate_Modparams
                     ? (uint16_t)(1000000UL / ExpressLRS_currAirRate_Modparams->interval) : 0;
         // telemetry LQ = drone tlm packets received this second / expected slots.
@@ -302,8 +478,9 @@ void Ghost_Loop(uint32_t nowMs)
         const char *st = connectionState == connected    ? "LOCK" :
                          connectionState == tentative     ? "TENT" :
                          connectionState == disconnected  ? "SRCH" : "----";
-        DBGLN("[TLM RX] %s rate=%uHz raw=%u tlmPkts=%u | DRONE rssi=%d lq=%u snr=%d | tx rssi=-%u lq=%u",
+        DBGLN("[TLM RX] %s rate=%uHz raw=%u tlmPkts=%u crsf=%u badCrsf=%u | DRONE rssi=%d lq=%u snr=%d | tx rssi=-%u lq=%u",
               st, hz, (unsigned)s_rawPkts, (unsigned)s_tlmPkts,
+              (unsigned)s_crsfFrames, (unsigned)s_crsfRejected,
               Sniffer_TlmRssiDbm(), (unsigned)s_tlmLq, Sniffer_TlmSnrDb(),
               CRSF::LinkStatistics.uplink_RSSI_1,
               CRSF::LinkStatistics.uplink_Link_quality);
@@ -318,12 +495,9 @@ void Ghost_SetupTransports(void)
     // hardware-configured boot (connectionState is a normal state, < MODE_STATES).
     if (connectionState > MODE_STATES) return;
 
-#if defined(MY_BINDING_PHRASE)
-    // ELRS options already set UID[] from the compiled phrase at boot; this
-    // re-applies CRC seed + FHSS table from the same phrase to be explicit and
-    // to allow a fully runtime build to reuse the same path.
-    Sniffer_SetUidFromPhrase(MY_BINDING_PHRASE);
-#endif
+    // setupBindingFromConfig() has already loaded the saved UID and configured
+    // CRC/FHSS. Keep that choice: the web UI can override the flashed default.
+    s_uidValid = true;
 #if defined(GHOST_TRANSPORT_SERIAL)
     GhostSerial_Init();
 #endif
