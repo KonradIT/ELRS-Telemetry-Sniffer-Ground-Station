@@ -33,6 +33,7 @@
 
 #include <U8g2lib.h>
 #include <Arduino.h>
+#include <WiFi.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sniffer.h"
@@ -40,6 +41,9 @@
 #include "common.h"          // connectionState, ExpressLRS_currAirRate_Modparams
 #include "logging.h"         // DBGLN
 #include "CRSF.h"            // CRSF::LinkStatistics (our sniff RSSI/LQ)
+#include "options.h"         // Wi-Fi AP credentials/address
+
+extern volatile WiFiMode_t wifiMode;
 
 #ifndef GHOST_OLED_SDA
 #define GHOST_OLED_SDA 18
@@ -144,6 +148,36 @@ static void i2cBusRecover()
 
 static void drawFrame(uint32_t nowMs)
 {
+    if (connectionState == wifiUpdate)
+    {
+        char line[32];
+        u8g2.clearBuffer();
+        u8g2.setFont(u8g2_font_6x12_tf);
+        u8g2.drawStr(0, 10, "Wi-Fi configuration");
+        u8g2.setFont(u8g2_font_5x8_tf);
+        if (wifiMode == WIFI_STA)
+        {
+            u8g2.drawStr(0, 23, "Join the same home Wi-Fi");
+            snprintf(line, sizeof line, "%s.local", wifi_hostname);
+            u8g2.drawStr(0, 33, line);
+            String address = WiFi.localIP().toString();
+            u8g2.drawStr(0, 43, address.c_str());
+        }
+        else
+        {
+            snprintf(line, sizeof line, "SSID: %s", wifi_ap_ssid);
+            u8g2.drawStr(0, 23, line);
+            snprintf(line, sizeof line, "PASS: %s", wifi_ap_password);
+            u8g2.drawStr(0, 33, line);
+            snprintf(line, sizeof line, "http://%s", wifi_ap_address);
+            u8g2.drawStr(0, 43, line);
+        }
+        u8g2.drawStr(0, 53, "Set phrase + radio band");
+        u8g2.drawStr(0, 63, "Save, then reboot");
+        u8g2.sendBuffer();
+        return;
+    }
+
     uint8_t rateIdx = ExpressLRS_currAirRate_Modparams ? ExpressLRS_currAirRate_Modparams->index : 0;
     uint32_t age = (T.lastFrameMs) ? (nowMs - T.lastFrameMs) / 1000 : 999;
     if (age > 999) age = 999;

@@ -96,7 +96,10 @@ is logged in [`docs/05_working_config_and_gotchas.md`](docs/05_working_config_an
 
 For the **T3-S3 LR1121 non-PA** board, use the separate
 [LR1121 build and binary USB CRSF guide](docs/06_lr1121_usb.md). Its hardware
-layout and radio configuration differ from the SX1280 target above.
+layout and radio configuration differ from the SX1280 target above. With no
+matching link for 60 seconds after boot, it opens the ExpressLRS Wi-Fi
+configuration page, where you can save the binding and choose 2.4 GHz or
+sub-GHz reception.
 
 ## Compatibility
 
