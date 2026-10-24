@@ -28,6 +28,9 @@
 // Confirmed board facts (LilyGo T3-S3-SX1280 hw reference):
 //   SSD1306 @ 0x3C, shared I2C bus SDA=18 / SCL=17, no reset line,
 //   explicit Wire.begin(sda,scl) required (pins not the ESP32 default).
+// Other boards override the pins at build time: GHOST_OLED_SDA/SCL/RST plus
+// GHOST_OLED_PWR_PIN/GHOST_OLED_PWR_ON for a switched panel supply (Heltec
+// WiFi LoRa 32 V4: SDA=17, SCL=18, RST=21, Vext on GPIO36 active low).
 // =====================================================================
 #if defined(GHOST_DISPLAY) && defined(PLATFORM_ESP32)
 
@@ -56,6 +59,14 @@ extern volatile WiFiMode_t wifiMode;
 #endif
 #ifndef GHOST_OLED_ADDR
 #define GHOST_OLED_ADDR 0x3C           // 7-bit
+#endif
+// Optional panel supply switch (Heltec WiFi LoRa 32 V4: Vext on GPIO36, active
+// low). Left disabled for boards whose OLED is powered permanently.
+#ifndef GHOST_OLED_PWR_PIN
+#define GHOST_OLED_PWR_PIN -1
+#endif
+#ifndef GHOST_OLED_PWR_ON
+#define GHOST_OLED_PWR_ON LOW
 #endif
 
 #define GHOST_OLED_REFRESH       250    // ms between redraws (~4 Hz)
@@ -241,6 +252,12 @@ static void displayTask(void *)
 void GhostDisplay_Init(void)
 {
     Ghost_Transport_Register(&Display_sink);
+#if GHOST_OLED_PWR_PIN >= 0
+    // Switch the panel supply on first; the task's start-up delay doubles as
+    // the power-up settle time before the bus recovery pulses.
+    pinMode(GHOST_OLED_PWR_PIN, OUTPUT);
+    digitalWrite(GHOST_OLED_PWR_PIN, GHOST_OLED_PWR_ON);
+#endif
     if (!s_dispTask) {
         // Core 0 (RF loop runs on core 1); low priority; 4 KB stack for U8g2.
         xTaskCreatePinnedToCore(displayTask, "ghostoled", 4096, nullptr, 1, &s_dispTask, 0);

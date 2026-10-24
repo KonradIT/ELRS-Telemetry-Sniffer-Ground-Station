@@ -101,12 +101,29 @@ matching link for 60 seconds after boot, it opens the ExpressLRS Wi-Fi
 configuration page, where you can save the binding and choose 2.4 GHz or
 sub-GHz reception.
 
+For the **Heltec WiFi LoRa 32 V4** (ESP32-S3 + SX1262, 863–928 MHz), use the
+[Heltec V4 sub-GHz guide](docs/07_heltec_v4.md). ExpressLRS 3.5.6 has no
+SX126x support, so this target adds a receive-only SX126x driver and a
+`RADIO_SX126X` radio type. It receives 900 MHz LoRa links at 25, 50 and
+100 Hz (plus the LR1121-only 250 Hz / 200 Hz Full SF5 modes, unverified) and
+cannot demodulate the SX127x-style SF6 modes (200 Hz, 100 Hz Full, D50). Its
+configuration page offers the frequency plan only; the 2.4 GHz / sub-GHz
+switch exists solely on the LR1121 target. Reception was confirmed on one V4
+in a third-party bench test (FCC915, 100 Hz, GPS on the OLED); other rates
+remain unverified. On both sub-GHz targets an automatically opened
+configuration access point that nobody joins restarts the station after
+three minutes so listening resumes.
+
 ## Compatibility
 
 - **ExpressLRS 3.5.6** (pinned tag) — not tested against other versions.
 - **LILYGO T3-S3, PA/FEM (SX1280PA) revision.** The non-PA v1.0 variant uses
   different antenna-switch pins; adjust `firmware/hardware/*.json` accordingly
   and re-verify.
+- **LILYGO T3-S3 LR1121 V1.2** (2.4 GHz verified, sub-GHz unverified) and
+  **Heltec WiFi LoRa 32 V4** (SX1262, sub-GHz only, not yet run on hardware):
+  see [`docs/06_lr1121_usb.md`](docs/06_lr1121_usb.md) and
+  [`docs/07_heltec_v4.md`](docs/07_heltec_v4.md).
 - **GCS — macOS app:** built and tested on Apple Silicon. **GCS — Python:**
   cross-platform by design (aiohttp/bleak/pyserial), only exercised on macOS
   so far — Linux/Windows should work but aren't verified.

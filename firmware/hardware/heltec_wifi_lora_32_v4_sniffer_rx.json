@@ -1,0 +1,35 @@
+{
+  "_comment": "Heltec WiFi LoRa 32 V4: ESP32-S3 (8 MB flash per the vendor board file, 16 MB on a bench-tested specimen) + SX1262, 863-928 MHz. Receive-only ELRS telemetry sniffer; pins and front-end control confirmed receiving on hardware (FCC915, 100 Hz).",
+  "_source_pins": "https://wiki.heltec.org/docs/devices/open-source-hardware/esp32-series/three-platform/PlatformIO (pins_arduino.h for the V4)",
+  "_source_frontend": "https://github.com/meshtastic/firmware/blob/master/variants/esp32s3/heltec_v4/variant.h",
+  "_comment_serial": "No flight-controller UART pins. GHOST_SERIAL_RAW sends complete CRSF frames to native USB CDC; the diagnostic target sends readable logs and CRSF hex.",
+  "product_name": "Heltec WiFi LoRa 32 V4 Telemetry Sniffer",
+  "lua_name": "Heltec V4",
+
+  "radio_busy": 13,
+  "radio_dio1": 14,
+  "radio_miso": 11,
+  "radio_mosi": 10,
+  "radio_nss": 8,
+  "radio_rst": 12,
+  "radio_sck": 9,
+  "radio_dcdc": true,
+  "_comment_irq": "ELRS calls its IRQ field radio_dio1; the Heltec header names GPIO14 DIO0 but it is the SX1262 DIO1 interrupt. BUSY is GPIO13.",
+  "_comment_tcxo": "The module TCXO is powered from SX1262 DIO3 at 1.8 V and DIO2 selects the front-end TX/RX path. Both are configured by the SX126x driver integration using GHOST_SX126X_TCXO=2 and GHOST_SX126X_DIO2_RFSW=1, not by hardware JSON keys in ExpressLRS 3.5.6.",
+
+  "power_enable": 7,
+  "power_rxen": 2,
+  "power_txen": 5,
+  "_comment_frontend": "V4.2 boards carry a GC1109 and V4.3 boards a KCT8103L PA/LNA. GPIO7 enables the front-end LDO, GPIO2 is the chip enable (CSD) that ELRS drives high during receive, and GPIO5 is the KCT8103L CTX line that ELRS holds low during receive to select the LNA path (unused on GC1109 boards). The GC1109 CPS line on GPIO46 is left floating: it is ignored while receiving. The radio's DIO2 drives the remaining TX/RX select input, so no transmit path is ever enabled by GHOST_NO_TX builds.",
+
+  "power_min": 0,
+  "power_high": 0,
+  "power_max": 0,
+  "power_default": 0,
+  "power_values": [0],
+  "_comment_power": "Only a 0 dBm power-table entry is provided. GHOST_NO_TX prevents RF transmission; these entries also keep unused TX configuration conservative.",
+
+  "led": 35,
+  "use_backpack": false,
+  "_comment_screen": "The 0.96in SSD1315 OLED (SSD1306 compatible) is driven by devGhostDisplay.cpp on SDA17/SCL18 with reset GPIO21 and Vext power on GPIO36 (active low). No ELRS screen_* keys are used."
+}
