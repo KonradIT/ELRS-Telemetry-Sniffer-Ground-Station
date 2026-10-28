@@ -1,6 +1,7 @@
 // =====================================================================
 // ELRS Telemetry Sniffer (Ghost RX) - core implementation
-// Targets ExpressLRS 3.5.x, SX1280 2.4 GHz / LR1121 dual-band, ESP32-S3.
+// Targets ExpressLRS 3.5.x on ESP32-S3 with SX1280 2.4 GHz, LR1121 dual-band
+// or SX1262 sub-GHz (Heltec WiFi LoRa 32 V4) radios.
 // =====================================================================
 #include "sniffer.h"
 
@@ -33,6 +34,7 @@ void LostConnection(bool resumeRx);
 static volatile uint32_t s_tlmPkts = 0;
 static volatile uint32_t s_rawPkts = 0;   // every SX1280 demod (any CRC result)
 static volatile uint32_t s_rawOk   = 0;   // subset with HW status RX_OK
+static volatile uint32_t s_okPkts  = 0;   // subset that passed the ELRS OTA CRC/UID check
 static uint32_t s_crsfFrames = 0;
 static uint32_t s_crsfRejected = 0;
 
@@ -56,6 +58,7 @@ void Sniffer_OnRawPacket(bool hwOk)
 // signal; ignore RC/SYNC/MSP so RSSI reflects the aircraft, not the handset.
 void Sniffer_OnPacketStats(uint8_t type, int rssiDbm, int snrRaw)
 {
+    s_okPkts++;   // reached only after the OTA CRC and UID checks passed
     if (type != PACKET_TYPE_TLM) return;
     if (rssiDbm > 0) rssiDbm = 0;
     // light IIR so a single weak packet doesn't jump the reading
@@ -336,9 +339,9 @@ static void Sniffer_PollSerialCmd()
             else if (idx == 1 && line[0] == 'D')
             {
                 // Fixed format and numeric fields keep this response bounded.
-                USBSerial.printf("[D] ready=%u state=%u raw=%u tlm=%u crsf=%u bad=%u usbFree=%d uptime=%u\n",
+                USBSerial.printf("[D] ready=%u state=%u raw=%u ok=%u tlm=%u crsf=%u bad=%u usbFree=%d uptime=%u\n",
                                  (unsigned)s_ghostReady, (unsigned)connectionState,
-                                 (unsigned)s_rawPkts, (unsigned)s_tlmPkts,
+                                 (unsigned)s_rawPkts, (unsigned)s_okPkts, (unsigned)s_tlmPkts,
                                  (unsigned)s_crsfFrames, (unsigned)s_crsfRejected,
                                  USBSerial.availableForWrite(), (unsigned)millis());
 #if defined(RADIO_LR1121)
@@ -356,6 +359,12 @@ static void Sniffer_PollSerialCmd()
                                      version[0], version[1], version[2], version[3], version[4],
                                      digitalRead(GPIO_PIN_BUSY));
                 }
+#endif
+#if defined(RADIO_SX126X)
+                USBSerial.printf("[D] domain=%u freq=%u irq=%u rxdone=%u busyTimeouts=%u uid=%u,%u,%u,%u,%u,%u\n",
+                                 (unsigned)firmwareOptions.domain, (unsigned)Radio.currFreq,
+                                 (unsigned)Radio.irqCount, (unsigned)Radio.rxDoneCount, (unsigned)Radio.GetBusyTimeouts(),
+                                 UID[0], UID[1], UID[2], UID[3], UID[4], UID[5]);
 #endif
             }
 #endif
@@ -460,6 +469,19 @@ void Ghost_Loop(uint32_t nowMs)
 #if defined(RADIO_LR1121) && defined(DEBUG_ENABLED)
         Sniffer_LogRadioHealth();
 #endif
+#if defined(RADIO_SX126X) && defined(DEBUG_ENABLED)
+        if (connectionState == disconnected)
+        {
+            // Radio IRQ callbacks share the SPI bus: keep the two reads atomic.
+            noInterrupts();
+            uint8_t status = Radio.GetStatus();
+            uint16_t errors = Radio.GetDeviceErrors();
+            interrupts();
+            DBGLN("[SX126x] status=%x mode=%u errors=%x irq=%u rxdone=%u busyTimeouts=%u freq=%u",
+                  status, (status >> 4) & 7, errors, (unsigned)Radio.irqCount,
+                  (unsigned)Radio.rxDoneCount, (unsigned)Radio.GetBusyTimeouts(), (unsigned)Radio.currFreq);
+        }
+#endif
         uint16_t hz = ExpressLRS_currAirRate_Modparams
                     ? (uint16_t)(1000000UL / ExpressLRS_currAirRate_Modparams->interval) : 0;
         // telemetry LQ = drone tlm packets received this second / expected slots.
@@ -478,8 +500,8 @@ void Ghost_Loop(uint32_t nowMs)
         const char *st = connectionState == connected    ? "LOCK" :
                          connectionState == tentative     ? "TENT" :
                          connectionState == disconnected  ? "SRCH" : "----";
-        DBGLN("[TLM RX] %s rate=%uHz raw=%u tlmPkts=%u crsf=%u badCrsf=%u | DRONE rssi=%d lq=%u snr=%d | tx rssi=-%u lq=%u",
-              st, hz, (unsigned)s_rawPkts, (unsigned)s_tlmPkts,
+        DBGLN("[TLM RX] %s rate=%uHz raw=%u ok=%u tlmPkts=%u crsf=%u badCrsf=%u | DRONE rssi=%d lq=%u snr=%d | tx rssi=-%u lq=%u",
+              st, hz, (unsigned)s_rawPkts, (unsigned)s_okPkts, (unsigned)s_tlmPkts,
               (unsigned)s_crsfFrames, (unsigned)s_crsfRejected,
               Sniffer_TlmRssiDbm(), (unsigned)s_tlmLq, Sniffer_TlmSnrDb(),
               CRSF::LinkStatistics.uplink_RSSI_1,

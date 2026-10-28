@@ -35,14 +35,19 @@ telemetry-sniffer/
 │  ├─ 02_build_flash_guide.md   ← general build/flash + layout
 │  ├─ 03_bringup_runbook.md     ← phased bench bring-up with success criteria
 │  ├─ 04_flash_serial.md        ← build & flash the serial-debug build
-│  └─ 05_working_config_and_gotchas.md ← READ FIRST: known-good config + every fix
+│  ├─ 05_working_config_and_gotchas.md ← READ FIRST: known-good config + every fix
+│  ├─ 06_lr1121_usb.md          ← T3-S3 LR1121 target: dual band, binary USB CRSF
+│  └─ 07_heltec_v4.md           ← Heltec WiFi LoRa 32 V4 target: SX1262, sub-GHz only
 ├─ firmware/
-│  ├─ build.sh                              ← one command: integrate + patch + build
-│  ├─ integrate.py                          ← copies sources + patches rx_main (idempotent)
+│  ├─ build.sh                              ← one command: integrate + patch + build (SX1280)
+│  ├─ build.py                              ← cross-platform stage/build for every target
+│  ├─ integrate.py                          ← copies sources + patches ELRS (idempotent)
 │  ├─ rx_main_ghost.patch                   ← verified unified diff (git apply / patch -p1)
-│  ├─ hardware/lilygo_t3s3_sniffer_rx.json  ← runtime pin layout (recommended)
+│  ├─ boards/heltec_wifi_lora_32_V4.json    ← vendor PlatformIO board definition
+│  ├─ lib/SX126xDriver/                     ← receive-only SX1261/SX1262 driver (RADIO_SX126X)
+│  ├─ hardware/*.json                       ← runtime pin layouts per board (recommended)
 │  ├─ target/T3S3_Sniffer_RX.h              ← static pin header (fallback)
-│  ├─ targets/t3s3_sniffer.ini              ← PlatformIO envs (…_Serial and …_Wireless)
+│  ├─ targets/*.ini                         ← PlatformIO envs per board
 │  └─ src/
 │     ├─ sniffer.h / sniffer.cpp            ← core: UID-from-phrase, TLM capture, reassembly
 │     ├─ rx_main.patch.md                   ← human-readable explanation of the 6 edits
